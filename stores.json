@@ -1,0 +1,323 @@
+{
+  "stores": [
+    {
+      "id": "prodtovary-1",
+      "brand": "prodtovary",
+      "name": "Продтовары",
+      "branch": "ул. Советская, 45",
+      "city": "г. Брест",
+      "bot_param": "prodtovary-1"
+    },
+    {
+      "id": "prodtovary-2",
+      "brand": "prodtovary",
+      "name": "Продтовары",
+      "branch": "ул. Пушкинская, 22",
+      "city": "г. Брест",
+      "bot_param": "prodtovary-2"
+    },
+    {
+      "id": "prodtovary-3",
+      "brand": "prodtovary",
+      "name": "Продтовары",
+      "branch": "ул. Московская, 10",
+      "city": "г. Брест",
+      "bot_param": "prodtovary-3"
+    },
+    {
+      "id": "prodtovary-4",
+      "brand": "prodtovary",
+      "name": "Продтовары",
+      "branch": "пр. Машерова, 56",
+      "city": "г. Брест",
+      "bot_param": "prodtovary-4"
+    },
+    {
+      "id": "prodtovary-5",
+      "brand": "prodtovary",
+      "name": "Продтовары",
+      "branch": "ул. Гоголя, 9",
+      "city": "г. Брест",
+      "bot_param": "prodtovary-5"
+    },
+    {
+      "id": "prodtovary-6",
+      "brand": "prodtovary",
+      "name": "Продтовары",
+      "branch": "ул. Карбышева, 33",
+      "city": "г. Брест",
+      "bot_param": "prodtovary-6"
+    },
+    {
+      "id": "prodtovary-7",
+      "brand": "prodtovary",
+      "name": "Продтовары",
+      "branch": "ул. Дзержинского, 17",
+      "city": "г. Брест",
+      "bot_param": "prodtovary-7"
+    },
+    {
+      "id": "prodtovary-8",
+      "brand": "prodtovary",
+      "name": "Продтовары",
+      "branch": "ул. Ленина, 104",
+      "city": "г. Брест",
+      "bot_param": "prodtovary-8"
+    },
+    {
+      "id": "prodtovary-9",
+      "brand": "prodtovary",
+      "name": "Продтовары",
+      "branch": "ул. Орджоникидзе, 25",
+      "city": "г. Брест",
+      "bot_param": "prodtovary-9"
+    },
+    {
+      "id": "prodtovary-10",
+      "brand": "prodtovary",
+      "name": "Продтовары",
+      "branch": "ул. Куйбышева, 58",
+      "city": "г. Брест",
+      "bot_param": "prodtovary-10"
+    },
+    {
+      "id": "prodtovary-11",
+      "brand": "prodtovary",
+      "name": "Продтовары",
+      "branch": "бульв. Шевченко, 4",
+      "city": "г. Брест",
+      "bot_param": "prodtovary-11"
+    },
+    {
+      "id": "prodtovary-12",
+      "brand": "prodtovary",
+      "name": "Продтовары",
+      "branch": "ул. Краснознамённая, 78",
+      "city": "г. Брест",
+      "bot_param": "prodtovary-12"
+    },
+    {
+      "id": "diskaunter-1",
+      "brand": "diskaunter",
+      "name": "Дискаунтер",
+      "branch": "пр. Машерова, 12",
+      "city": "г. Брест",
+      "bot_param": "diskaunter-1"
+    },
+    {
+      "id": "diskaunter-2",
+      "brand": "diskaunter",
+      "name": "Дискаунтер",
+      "branch": "ул. Советская, 90",
+      "city": "г. Брест",
+      "bot_param": "diskaunter-2"
+    },
+    {
+      "id": "diskaunter-3",
+      "brand": "diskaunter",
+      "name": "Дискаунтер",
+      "branch": "ул. Московская, 340",
+      "city": "г. Брест",
+      "bot_param": "diskaunter-3"
+    },
+    {
+      "id": "diskaunter-4",
+      "brand": "diskaunter",
+      "name": "Дискаунтер",
+      "branch": "ул. Ленина, 65",
+      "city": "г. Брест",
+      "bot_param": "diskaunter-4"
+    },
+    {
+      "id": "diskaunter-5",
+      "brand": "diskaunter",
+      "name": "Дискаунтер",
+      "branch": "пр. Варшавский, 100",
+      "city": "г. Брест",
+      "bot_param": "diskaunter-5"
+    },
+    {
+      "id": "diskaunter-6",
+      "brand": "diskaunter",
+      "name": "Дискаунтер",
+      "branch": "ул. Писателя Смирнова, 5",
+      "city": "г. Брест",
+      "bot_param": "diskaunter-6"
+    },
+    {
+      "id": "diskaunter-7",
+      "brand": "diskaunter",
+      "name": "Дискаунтер",
+      "branch": "ул. Суворова, 47",
+      "city": "г. Брест",
+      "bot_param": "diskaunter-7"
+    },
+    {
+      "id": "diskaunter-8",
+      "brand": "diskaunter",
+      "name": "Дискаунтер",
+      "branch": "ул. Гаврилова, 8",
+      "city": "г. Брест",
+      "bot_param": "diskaunter-8"
+    },
+    {
+      "id": "miks-1",
+      "brand": "miks",
+      "name": "Супермаркет Микс",
+      "branch": "ул. Ленина, 89",
+      "city": "г. Брест",
+      "bot_param": "miks-1"
+    },
+    {
+      "id": "doma-zhdut-1",
+      "brand": "doma-zhdut",
+      "name": "Дома ждут!",
+      "branch": "пр. Машерова, 20",
+      "city": "г. Брест",
+      "bot_param": "doma-zhdut-1"
+    },
+    {
+      "id": "doma-zhdut-2",
+      "brand": "doma-zhdut",
+      "name": "Дома ждут!",
+      "branch": "ул. Советская, 13",
+      "city": "г. Брест",
+      "bot_param": "doma-zhdut-2"
+    },
+    {
+      "id": "doma-zhdut-3",
+      "brand": "doma-zhdut",
+      "name": "Дома ждут!",
+      "branch": "ул. Пионерская, 3",
+      "city": "г. Брест",
+      "bot_param": "doma-zhdut-3"
+    },
+    {
+      "id": "doma-zhdut-4",
+      "brand": "doma-zhdut",
+      "name": "Дома ждут!",
+      "branch": "ул. Московская, 215",
+      "city": "г. Брест",
+      "bot_param": "doma-zhdut-4"
+    },
+    {
+      "id": "doma-zhdut-5",
+      "brand": "doma-zhdut",
+      "name": "Дома ждут!",
+      "branch": "ул. Карбышева, 61",
+      "city": "г. Брест",
+      "bot_param": "doma-zhdut-5"
+    },
+    {
+      "id": "doma-zhdut-6",
+      "brand": "doma-zhdut",
+      "name": "Дома ждут!",
+      "branch": "ул. Гоголя, 42",
+      "city": "г. Брест",
+      "bot_param": "doma-zhdut-6"
+    },
+    {
+      "id": "doma-zhdut-7",
+      "brand": "doma-zhdut",
+      "name": "Дома ждут!",
+      "branch": "ул. Дзержинского, 53",
+      "city": "г. Брест",
+      "bot_param": "doma-zhdut-7"
+    },
+    {
+      "id": "doma-zhdut-8",
+      "brand": "doma-zhdut",
+      "name": "Дома ждут!",
+      "branch": "пр. Варшавский, 37",
+      "city": "г. Брест",
+      "bot_param": "doma-zhdut-8"
+    },
+    {
+      "id": "doma-zhdut-9",
+      "brand": "doma-zhdut",
+      "name": "Дома ждут!",
+      "branch": "ул. Писателя Смирнова, 16",
+      "city": "г. Брест",
+      "bot_param": "doma-zhdut-9"
+    },
+    {
+      "id": "doma-zhdut-10",
+      "brand": "doma-zhdut",
+      "name": "Дома ждут!",
+      "branch": "ул. Суворова, 29",
+      "city": "г. Брест",
+      "bot_param": "doma-zhdut-10"
+    },
+    {
+      "id": "doma-zhdut-11",
+      "brand": "doma-zhdut",
+      "name": "Дома ждут!",
+      "branch": "ул. Куйбышева, 12",
+      "city": "г. Брест",
+      "bot_param": "doma-zhdut-11"
+    },
+    {
+      "id": "doma-zhdut-12",
+      "brand": "doma-zhdut",
+      "name": "Дома ждут!",
+      "branch": "бульв. Шевченко, 19",
+      "city": "г. Брест",
+      "bot_param": "doma-zhdut-12"
+    },
+    {
+      "id": "podari-vino-1",
+      "brand": "podari-vino",
+      "name": "Подари вино",
+      "branch": "ул. Советская, 67",
+      "city": "г. Брест",
+      "bot_param": "podari-vino-1"
+    },
+    {
+      "id": "podari-vino-2",
+      "brand": "podari-vino",
+      "name": "Подари вино",
+      "branch": "пр. Машерова, 44",
+      "city": "г. Брест",
+      "bot_param": "podari-vino-2"
+    },
+    {
+      "id": "podari-vino-3",
+      "brand": "podari-vino",
+      "name": "Подари вино",
+      "branch": "ул. Ленина, 27",
+      "city": "г. Брест",
+      "bot_param": "podari-vino-3"
+    },
+    {
+      "id": "podari-vino-4",
+      "brand": "podari-vino",
+      "name": "Подари вино",
+      "branch": "ул. Московская, 88",
+      "city": "г. Брест",
+      "bot_param": "podari-vino-4"
+    },
+    {
+      "id": "podari-vino-5",
+      "brand": "podari-vino",
+      "name": "Подари вино",
+      "branch": "пр. Варшавский, 200",
+      "city": "г. Брест",
+      "bot_param": "podari-vino-5"
+    },
+    {
+      "id": "podari-vino-6",
+      "brand": "podari-vino",
+      "name": "Подари вино",
+      "branch": "ул. Карбышева, 15",
+      "city": "г. Брест",
+      "bot_param": "podari-vino-6"
+    }
+  ],
+  "brands": {
+    "prodtovary": { "label": "Продтовары", "color": "#5b4cdb" },
+    "diskaunter":  { "label": "Дискаунтер",  "color": "#e04040" },
+    "miks":        { "label": "Супермаркет Микс", "color": "#2aa25e" },
+    "doma-zhdut":  { "label": "Дома ждут!",  "color": "#e08c20" },
+    "podari-vino": { "label": "Подари вино", "color": "#8e3fa0" }
+  }
+}
