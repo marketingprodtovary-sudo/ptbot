@@ -30,8 +30,8 @@ from telegram.constants import ParseMode
 # ══════════════════════════════════════════════════════════
 #  НАСТРОЙКИ — ОБЯЗАТЕЛЬНО ЗАПОЛНИТЬ
 # ══════════════════════════════════════════════════════════
-BOT_TOKEN      = os.getenv("BOT_TOKEN",     "8326333850:AAFAG5vaWAjcr25gKfhj4C57qd0zf3Dbki4")
-ADMIN_CHAT_ID  = int(os.getenv("ADMIN_CHAT_ID", "8326333850"))
+BOT_TOKEN      = os.getenv("BOT_TOKEN",     "8326333850:AAHxoZudQiV0BYc7H9bt-uZJzVZwp9zHuuY")
+ADMIN_CHAT_ID  = int(os.getenv("ADMIN_CHAT_ID", "692965876"))
 
 INSTAGRAM_LINK       = "https://www.instagram.com/ptbrest/"
 COUPON_DISCOUNT      = 10       # % скидки
