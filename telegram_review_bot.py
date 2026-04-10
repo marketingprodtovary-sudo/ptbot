@@ -1,16 +1,15 @@
 """
 Telegram Bot для сбора отзывов — ПродТовары
-Исправленная версия: все ошибки устранены.
+Версия 2.0: несколько админов + ответы клиентам прямо из бота.
 
 Установка:
-    pip install python-telegram-bot
+    pip install python-telegram-bot==21.9
 
 Запуск:
     python telegram_review_bot.py
 
 Переменные окружения (опционально):
     BOT_TOKEN      — токен бота от @BotFather
-    ADMIN_CHAT_ID  — ваш Telegram user-id для получения отзывов
 """
 
 import os
@@ -28,17 +27,18 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 
 # ══════════════════════════════════════════════════════════
-#  НАСТРОЙКИ — ОБЯЗАТЕЛЬНО ЗАПОЛНИТЬ
+#  НАСТРОЙКИ
 # ══════════════════════════════════════════════════════════
-BOT_TOKEN      = os.getenv("BOT_TOKEN",     "8326333850:AAHxoZudQiV0BYc7H9bt-uZJzVZwp9zHuuY")
-ADMIN_CHAT_ID  = int(os.getenv("ADMIN_CHAT_ID", "692965876"))
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8326333850:AAFAG5vaWAjcr25gKfhj4C57qd0zf3Dbki4")
+
+# Список всех администраторов (получают уведомления и могут отвечать клиентам)
+ADMIN_IDS = [8196996608, 1689088225]
 
 INSTAGRAM_LINK       = "https://www.instagram.com/ptbrest/"
 COUPON_DISCOUNT      = 10       # % скидки
 COUPON_PREFIX        = "PT"     # префикс кода купона
 COUPON_VALIDITY_DAYS = 30       # срок действия купона
 
-# Путь к JSON с магазинами (относительно папки скрипта)
 STORES_JSON_PATH = os.path.join(os.path.dirname(__file__), "stores.json")
 # ══════════════════════════════════════════════════════════
 
@@ -55,6 +55,13 @@ ENTERING_NAME, ENTERING_PHONE, CONFIRM_REVIEW, INSTAGRAM_OFFER = range(7)
 # ── Хранилища (в памяти; при перезапуске сбрасываются) ──
 reviews_storage = []
 coupons_storage = []
+
+# Словарь: admin_id → user_id, которому админ сейчас пишет ответ
+admin_reply_state = {}
+
+
+def is_admin(user_id: int) -> bool:
+    return user_id in ADMIN_IDS
 
 
 # ══════════════════════════════════════════════════════════
@@ -92,14 +99,12 @@ class CouponData:
 # ══════════════════════════════════════════════════════════
 
 def load_stores() -> dict:
-    """Загружает stores.json. Возвращает словарь id→store."""
     try:
         with open(STORES_JSON_PATH, encoding="utf-8") as f:
             data = json.load(f)
         return {s["id"]: s for s in data.get("stores", [])}
     except Exception as e:
         logger.error(f"Не удалось загрузить stores.json: {e}")
-        # Минимальный fallback
         return {
             "prodtovary-1": {"id": "prodtovary-1", "name": "Продтовары",
                              "branch": "ул. Советская, 45", "city": "г. Брест",
@@ -108,7 +113,6 @@ def load_stores() -> dict:
 
 STORES = load_stores()
 
-# Сгруппировать магазины по бренду для клавиатуры
 BRAND_ORDER = ["prodtovary", "diskaunter", "miks", "doma-zhdut", "podari-vino"]
 BRAND_NAMES = {
     "prodtovary":  "Продтовары",
@@ -124,7 +128,6 @@ BRAND_NAMES = {
 # ══════════════════════════════════════════════════════════
 
 def generate_coupon(user_id: int) -> str:
-    """Генерирует уникальный купон."""
     import hashlib, random
     base = f"{user_id}{datetime.now().timestamp()}{random.randint(1000, 9999)}"
     code = f"{COUPON_PREFIX}{hashlib.md5(base.encode()).hexdigest()[:6].upper()}"
@@ -133,7 +136,6 @@ def generate_coupon(user_id: int) -> str:
 
 
 def verify_coupon(code: str) -> dict:
-    """Проверяет купон. Возвращает словарь с результатом."""
     for c in coupons_storage:
         if c.code == code:
             if c.used:
@@ -150,7 +152,6 @@ def verify_coupon(code: str) -> dict:
 # ══════════════════════════════════════════════════════════
 
 def shop_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура выбора магазина, сгруппированная по бренду."""
     buttons = []
     by_brand = {}
     for s in STORES.values():
@@ -160,12 +161,10 @@ def shop_keyboard() -> InlineKeyboardMarkup:
         shops = by_brand.get(brand, [])
         if not shops:
             continue
-        # Заголовок бренда как неактивная кнопка
         buttons.append([InlineKeyboardButton(
             f"── {BRAND_NAMES.get(brand, brand)} ──",
             callback_data="noop"
         )])
-        # Магазины по 2 в строку
         row = []
         for i, s in enumerate(shops):
             row.append(InlineKeyboardButton(s["branch"], callback_data=f"shop_{s['id']}"))
@@ -189,11 +188,10 @@ def rating_keyboard() -> InlineKeyboardMarkup:
 
 
 # ══════════════════════════════════════════════════════════
-#  HANDLERS
+#  HANDLERS — ПОЛЬЗОВАТЕЛЬ
 # ══════════════════════════════════════════════════════════
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Точка входа. Обрабатывает deep-link ?start=review_<shop_id>"""
     context.user_data["review"] = ReviewData()
     review: ReviewData = context.user_data["review"]
     review.user_tg_id = update.effective_user.id
@@ -201,9 +199,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     args = context.args or []
     shop_id = None
 
-    # Deep-link: /start review_prodtovary-3
     if args and args[0].startswith("review_"):
-        candidate = args[0][7:]  # убираем "review_"
+        candidate = args[0][7:]
         if candidate in STORES:
             shop_id = candidate
 
@@ -224,7 +221,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await msg.reply_text(welcome, reply_markup=rating_keyboard(), parse_mode=ParseMode.HTML)
         return ENTERING_RATING
 
-    # Без deep-link — показываем список
     await (update.message or update.callback_query.message).reply_text(
         "👋 <b>Здравствуйте!</b>\n\nВыберите магазин, в котором были:",
         reply_markup=shop_keyboard(),
@@ -277,6 +273,10 @@ async def select_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 
 async def enter_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    # Если это админ, который сейчас пишет ответ клиенту — перехватываем
+    if is_admin(update.effective_user.id) and update.effective_user.id in admin_reply_state:
+        return await handle_admin_reply_text(update, context)
+
     text = update.message.text.strip()
 
     if len(text) < 10:
@@ -344,7 +344,6 @@ async def confirm_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await query.answer()
 
     if "no" in query.data:
-        # Сброс и новый старт
         context.user_data["review"] = ReviewData()
         await query.edit_message_text("🔄 Начинаем заново. Выберите магазин:",
                                        reply_markup=shop_keyboard())
@@ -353,14 +352,11 @@ async def confirm_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     review: ReviewData = context.user_data["review"]
     reviews_storage.append(review)
 
-    # Генерируем купон
     coupon_code = generate_coupon(update.effective_user.id)
     context.user_data["coupon"] = coupon_code
 
-    # Уведомление администратору
     await send_admin_notification(context, review, coupon_code=coupon_code)
 
-    # Предложение Instagram + купон
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("📸 Подписаться на Instagram", url=INSTAGRAM_LINK)],
         [InlineKeyboardButton("✅ Я подписался!",           callback_data="instagram_yes")],
@@ -407,7 +403,6 @@ async def instagram_yes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         parse_mode=ParseMode.HTML
     )
 
-    # Уведомить администратора о подтверждённой подписке
     review = context.user_data.get("review")
     if review:
         await send_admin_notification(context, review, coupon_code=coupon_code,
@@ -440,6 +435,12 @@ async def instagram_skip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    # Если админ отменяет режим ответа
+    if is_admin(update.effective_user.id) and update.effective_user.id in admin_reply_state:
+        del admin_reply_state[update.effective_user.id]
+        await update.message.reply_text("❌ Режим ответа клиенту отменён.", reply_markup=ReplyKeyboardRemove())
+        return ConversationHandler.END
+
     await update.message.reply_text(
         "❌ Процесс отменён. Используйте /start для начала.",
         reply_markup=ReplyKeyboardRemove()
@@ -458,7 +459,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 # ══════════════════════════════════════════════════════════
-#  УВЕДОМЛЕНИЕ АДМИНИСТРАТОРУ
+#  УВЕДОМЛЕНИЕ АДМИНИСТРАТОРАМ
 # ══════════════════════════════════════════════════════════
 
 async def send_admin_notification(
@@ -467,9 +468,15 @@ async def send_admin_notification(
     coupon_code: str = None,
     instagram_subscribed: bool = None
 ) -> None:
-    """Отправляет полное уведомление в чат администратора."""
+    """Отправляет уведомление всем администраторам с кнопкой ответа клиенту."""
     try:
         stars = "⭐" * (review.rating or 0)
+
+        # Имя пользователя в Telegram если есть
+        username_line = ""
+        if review.user_tg_id:
+            username_line = f"🔗 <b>Написать напрямую:</b> tg://user?id={review.user_tg_id}\n"
+
         msg = (
             f"📬 <b>НОВЫЙ ОТЗЫВ</b>\n\n"
             f"🏪 <b>Магазин:</b> {review.shop_name} — {review.branch}, {review.city or ''}\n"
@@ -477,6 +484,7 @@ async def send_admin_notification(
             f"👤 <b>Имя:</b> {review.user_name or 'Аноним'}\n"
             f"📱 <b>Телефон:</b> {review.user_phone or 'не указан'}\n"
             f"🤖 <b>Telegram ID:</b> {review.user_tg_id or '—'}\n"
+            f"{username_line}"
             f"⏰ <b>Время:</b> {review.timestamp.strftime('%d.%m.%Y %H:%M')}\n\n"
             f"📝 <b>Текст отзыва:</b>\n{review.review_text}\n"
         )
@@ -495,22 +503,139 @@ async def send_admin_notification(
         elif instagram_subscribed is False:
             msg += "\n❌ <b>Instagram:</b> Пропустил"
 
-        await context.bot.send_message(
-            chat_id=ADMIN_CHAT_ID,
-            text=msg,
-            parse_mode=ParseMode.HTML
-        )
+        # Кнопка "Ответить клиенту" — только если есть Telegram ID
+        keyboard = None
+        if review.user_tg_id:
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    "💬 Ответить клиенту",
+                    callback_data=f"reply_{review.user_tg_id}"
+                )
+            ]])
+
+        # Отправляем всем администраторам
+        for admin_id in ADMIN_IDS:
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=msg,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=keyboard
+                )
+            except Exception as e:
+                logger.error(f"Не удалось отправить уведомление администратору {admin_id}: {e}")
+
     except Exception as e:
-        logger.error(f"Ошибка отправки уведомления администратору: {e}")
+        logger.error(f"Ошибка отправки уведомления: {e}")
 
 
 # ══════════════════════════════════════════════════════════
-#  ADMIN: проверка купона
+#  ОТВЕТЫ КЛИЕНТАМ (для администраторов)
+# ══════════════════════════════════════════════════════════
+
+async def admin_reply_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Нажатие кнопки 'Ответить клиенту' — переводит админа в режим ответа."""
+    query = update.callback_query
+    await query.answer()
+
+    if not is_admin(query.from_user.id):
+        await query.answer("⛔ У вас нет прав администратора.", show_alert=True)
+        return
+
+    user_id = int(query.data.replace("reply_", ""))
+    admin_reply_state[query.from_user.id] = user_id
+
+    await context.bot.send_message(
+        chat_id=query.from_user.id,
+        text=(
+            f"💬 <b>Режим ответа клиенту</b>\n\n"
+            f"Напишите ваше сообщение — оно будет отправлено клиенту (ID: {user_id}).\n\n"
+            f"Для отмены напишите /cancel"
+        ),
+        parse_mode=ParseMode.HTML,
+        reply_markup=ReplyKeyboardMarkup(
+            [[KeyboardButton("❌ Отмена")]], resize_keyboard=True, one_time_keyboard=True
+        )
+    )
+
+
+async def handle_admin_reply_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает текст, который админ пишет в режиме ответа."""
+    admin_id = update.effective_user.id
+
+    if update.message.text == "❌ Отмена":
+        del admin_reply_state[admin_id]
+        await update.message.reply_text("❌ Режим ответа отменён.", reply_markup=ReplyKeyboardRemove())
+        return ConversationHandler.END
+
+    user_id = admin_reply_state.get(admin_id)
+    if not user_id:
+        return
+
+    reply_text = update.message.text.strip()
+
+    try:
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=(
+                f"📩 <b>Ответ от магазина ПродТовары:</b>\n\n"
+                f"{reply_text}\n\n"
+                f"<i>Если у вас есть вопросы, напишите нам снова через /start</i>"
+            ),
+            parse_mode=ParseMode.HTML
+        )
+
+        # Подтверждение админу
+        await update.message.reply_text(
+            f"✅ <b>Ответ отправлен клиенту!</b>\n\n"
+            f"<i>Ваше сообщение:</i>\n{reply_text}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=ReplyKeyboardRemove()
+        )
+
+        # Уведомить других админов
+        for other_admin_id in ADMIN_IDS:
+            if other_admin_id != admin_id:
+                try:
+                    await context.bot.send_message(
+                        chat_id=other_admin_id,
+                        text=(
+                            f"ℹ️ <b>Коллега ответил клиенту</b> (ID: {user_id}):\n\n"
+                            f"{reply_text}"
+                        ),
+                        parse_mode=ParseMode.HTML
+                    )
+                except Exception:
+                    pass
+
+        del admin_reply_state[admin_id]
+
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ Не удалось отправить сообщение клиенту.\n"
+            f"Возможно, пользователь заблокировал бота.\n\n"
+            f"Ошибка: {e}",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        del admin_reply_state[admin_id]
+
+    return ConversationHandler.END
+
+
+async def admin_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Перехватывает сообщения от администраторов вне диалога (режим ответа клиенту)."""
+    if not is_admin(update.effective_user.id):
+        return
+    if update.effective_user.id in admin_reply_state:
+        await handle_admin_reply_text(update, context)
+
+
+# ══════════════════════════════════════════════════════════
+#  ADMIN: проверка купона и статистика
 # ══════════════════════════════════════════════════════════
 
 async def check_coupon_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Администратор вводит /check PTXXXXXX — проверяет купон."""
-    if update.effective_user.id != ADMIN_CHAT_ID:
+    if not is_admin(update.effective_user.id):
         return
     args = context.args
     if not args:
@@ -521,8 +646,7 @@ async def check_coupon_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Администратор вводит /stats — краткая статистика."""
-    if update.effective_user.id != ADMIN_CHAT_ID:
+    if not is_admin(update.effective_user.id):
         return
 
     total = len(reviews_storage)
@@ -586,7 +710,16 @@ def main() -> None:
     application.add_handler(CommandHandler("check", check_coupon_cmd))
     application.add_handler(CommandHandler("stats", stats_cmd))
 
-    logger.info("Бот запущен.")
+    # Кнопка "Ответить клиенту" от администратора
+    application.add_handler(CallbackQueryHandler(admin_reply_button, pattern=r"^reply_\d+$"))
+
+    # Сообщения от администраторов вне диалога (режим ответа)
+    application.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND,
+        admin_message_handler
+    ))
+
+    logger.info("Бот запущен. Администраторы: %s", ADMIN_IDS)
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
