@@ -1,0 +1,1 @@
+worker: python telegram_review_bot.py
