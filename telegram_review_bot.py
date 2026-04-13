@@ -36,7 +36,7 @@ from telegram.constants import ParseMode
 # ══════════════════════════════════════════════════════════
 #  НАСТРОЙКИ
 # ══════════════════════════════════════════════════════════
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8326333850:AAFAG5vaWAjcr25gKfhj4C57qd0zf3Dbki4")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8326333850:AAHxoZudQiV0BYc7H9bt-uZJzVZwp9zHuuY")
 
 ADMIN_IDS = [8196996608, 1689088225]
 
