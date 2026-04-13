@@ -609,6 +609,9 @@ def run_http_server():
 #  MAIN
 # ══════════════════════════════════════════════════════════
 
+def main():
+    import asyncio
+    asyncio.set_event_loop(asyncio.new_event_loop())  # ← добавьте эту строку
 def main() -> None:
     global _app, _bot_loop
 
