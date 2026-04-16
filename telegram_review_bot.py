@@ -390,7 +390,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self):
-        if self.path != "/webhook/web-review":
+        if self.path != "worker-production-c885.up.railway.app":
             self.send_response(404)
             self.end_headers()
             return
