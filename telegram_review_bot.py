@@ -1,31 +1,27 @@
 """
-Telegram Bot для сбора отзывов — ПродТовары v3.0
+ПродТовары — Бот обратной связи v4.0
 
-Что нового:
-- Убраны кнопки "Я подписался" / "Без подписки"
-  Скидка через Instagram-сервис приходит автоматически в директ
-- Кнопка "Ответить клиенту" у администраторов
-- Приём отзывов с сайта через HTTP (порт 8080)
-- Два администратора получают все уведомления
+Принцип: минимум трений.
+  Deep-link с сайта → сразу пиши сообщение (1 касание)
+  Без deep-link → выбери магазин → пиши (2 касания)
+
+Не собираем имя/телефон — отвечаем в том же канале.
+Звёзды убраны — важен текст.
 
 Переменные окружения:
-    BOT_TOKEN   — токен бота от @BotFather
-    PORT        — порт для приёма веб-отзывов (по умолчанию 8080)
+    BOT_TOKEN   — токен от @BotFather
 """
 
 import os
 import json
 import logging
-import hashlib
-import random
 import asyncio
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup,
-    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+    Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 )
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -40,71 +36,35 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "8326333850:AAHxoZudQiV0BYc7H9bt-uZJzVZwp9zHu
 
 ADMIN_IDS = [8196996608, 1689088225]
 
-INSTAGRAM_LINK       = "https://www.instagram.com/ptbrest/"
-COUPON_DISCOUNT      = 5        # % скидки на продукты собственного производства
-COUPON_PREFIX        = "PT"
-COUPON_VALIDITY_DAYS = 30
+# Маршрутизация: brand → ID ответственного сотрудника
+# Раскомментируйте и добавьте ID когда узнаете их через @userinfobot
+STORE_STAFF: dict = {
+    # "prodtovary":  123456789,
+    # "diskaunter":  987654321,
+}
 
 STORES_JSON_PATH = os.path.join(os.path.dirname(__file__), "stores.json")
 PORT = int(os.getenv("PORT", 8080))
 # ══════════════════════════════════════════════════════════
 
 logging.basicConfig(
-    format="%(asctime)s — %(name)s — %(levelname)s — %(message)s",
+    format="%(asctime)s %(levelname)s: %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# ── Состояния диалога ──
-SELECTING_SHOP, ENTERING_RATING, ENTERING_REVIEW, \
-ENTERING_NAME, ENTERING_PHONE, CONFIRM_REVIEW = range(6)
+SELECTING_SHOP, WRITING_MESSAGE = range(2)
 
-# ── Хранилища ──
-reviews_storage   = []
-coupons_storage   = []
-admin_reply_state = {}  # admin_id → {"user_id": int, "source": str, "email": str|None}
-
-# Глобальная ссылка на приложение (для HTTP-сервера)
+reply_mode: dict = {}   # admin_id → {user_id, source}
 _app: Application = None
-_bot_loop: asyncio.AbstractEventLoop = None
+_bot_loop = None
 
 
-def is_admin(user_id: int) -> bool:
-    return user_id in ADMIN_IDS
+def is_admin(uid: int) -> bool:
+    return uid in ADMIN_IDS
 
 
-# ══════════════════════════════════════════════════════════
-#  КЛАССЫ ДАННЫХ
-# ══════════════════════════════════════════════════════════
-
-class ReviewData:
-    def __init__(self):
-        self.shop_id     = None
-        self.shop_name   = None
-        self.branch      = None
-        self.city        = None
-        self.rating      = None
-        self.review_text = None
-        self.user_name   = None
-        self.user_phone  = None
-        self.user_email  = None
-        self.user_tg_id  = None
-        self.source      = "telegram"  # "telegram" | "website"
-        self.timestamp   = datetime.now()
-
-
-class CouponData:
-    def __init__(self, code: str, discount: int, user_id: int):
-        self.code       = code
-        self.discount   = discount
-        self.user_id    = user_id
-        self.created_at = datetime.now()
-        self.used       = False
-
-
-# ══════════════════════════════════════════════════════════
-#  МАГАЗИНЫ
-# ══════════════════════════════════════════════════════════
+# ── Загрузка магазинов ──────────────────────────────────
 
 def load_stores() -> dict:
     try:
@@ -112,12 +72,15 @@ def load_stores() -> dict:
             data = json.load(f)
         return {s["id"]: s for s in data.get("stores", [])}
     except Exception as e:
-        logger.error(f"Не удалось загрузить stores.json: {e}")
+        logger.error(f"stores.json: {e}")
         return {
-            "prodtovary-1": {"id": "prodtovary-1", "name": "Продтовары",
-                             "branch": "ул. Советская, 45", "city": "г. Брест",
-                             "brand": "prodtovary"},
+            "prodtovary-2": {
+                "id": "prodtovary-2", "name": "Продтовары",
+                "branch": "ул. Волгоградская, 1", "city": "г. Брест",
+                "brand": "prodtovary"
+            },
         }
+
 
 STORES = load_stores()
 BRAND_ORDER = ["prodtovary", "diskaunter", "miks", "doma-zhdut", "podari-vino"]
@@ -130,13 +93,9 @@ BRAND_NAMES = {
 }
 
 
-# ══════════════════════════════════════════════════════════
-#  KEYBOARDS
-# ══════════════════════════════════════════════════════════
-
 def shop_keyboard() -> InlineKeyboardMarkup:
     buttons = []
-    by_brand = {}
+    by_brand: dict = {}
     for s in STORES.values():
         by_brand.setdefault(s["brand"], []).append(s)
     for brand in BRAND_ORDER:
@@ -150,62 +109,46 @@ def shop_keyboard() -> InlineKeyboardMarkup:
         for s in shops:
             row.append(InlineKeyboardButton(s["branch"], callback_data=f"shop_{s['id']}"))
             if len(row) == 2:
-                buttons.append(row); row = []
+                buttons.append(row)
+                row = []
         if row:
             buttons.append(row)
     return InlineKeyboardMarkup(buttons)
 
 
-def rating_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("⭐ 1",      callback_data="rating_1"),
-        InlineKeyboardButton("⭐⭐ 2",    callback_data="rating_2"),
-        InlineKeyboardButton("⭐⭐⭐ 3",  callback_data="rating_3"),
-    ],[
-        InlineKeyboardButton("⭐⭐⭐⭐ 4",   callback_data="rating_4"),
-        InlineKeyboardButton("⭐⭐⭐⭐⭐ 5", callback_data="rating_5"),
-    ]])
+# ── Клиентский диалог ───────────────────────────────────
 
+async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    user = update.effective_user
+    ctx.user_data.clear()
+    ctx.user_data["tg_id"] = user.id
+    ctx.user_data["username"] = (
+        f"@{user.username}" if user.username else user.full_name or str(user.id)
+    )
 
-# ══════════════════════════════════════════════════════════
-#  HANDLERS — ПОЛЬЗОВАТЕЛЬ
-# ══════════════════════════════════════════════════════════
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["review"] = ReviewData()
-    review: ReviewData = context.user_data["review"]
-    review.user_tg_id = update.effective_user.id
-
-    args = context.args or []
-    shop_id = None
+    args = ctx.args or []
     if args and args[0].startswith("review_"):
-        candidate = args[0][7:]
-        if candidate in STORES:
-            shop_id = candidate
-
-    if shop_id:
-        s = STORES[shop_id]
-        review.shop_id   = s["id"]
-        review.shop_name = s["name"]
-        review.branch    = s["branch"]
-        review.city      = s.get("city", "")
-        await update.message.reply_text(
-            f"🎉 <b>Добро пожаловать!</b>\n\n"
-            f"Вы выбрали магазин:\n"
-            f"<b>{s['name']}</b> — {s['branch']}, {s.get('city','')}\n\n"
-            f"Оцените ваш визит:",
-            reply_markup=rating_keyboard(), parse_mode=ParseMode.HTML
-        )
-        return ENTERING_RATING
+        shop_id = args[0][7:]
+        if shop_id in STORES:
+            s = STORES[shop_id]
+            ctx.user_data["shop"] = s
+            await update.message.reply_text(
+                f"✍️ <b>{s['name']}</b> — {s['branch']}\n\n"
+                f"Напишите — что понравилось, что нет, или любой вопрос.\n"
+                f"Мы ответим здесь.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=ReplyKeyboardRemove()
+            )
+            return WRITING_MESSAGE
 
     await update.message.reply_text(
-        "👋 <b>Здравствуйте!</b>\n\nВыберите магазин, в котором были:",
-        reply_markup=shop_keyboard(), parse_mode=ParseMode.HTML
+        "Выберите магазин:",
+        reply_markup=shop_keyboard()
     )
     return SELECTING_SHOP
 
 
-async def select_shop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def cb_select_shop(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
     if query.data == "noop":
@@ -214,189 +157,107 @@ async def select_shop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     if shop_id not in STORES:
         return SELECTING_SHOP
     s = STORES[shop_id]
-    review: ReviewData = context.user_data["review"]
-    review.shop_id   = s["id"]
-    review.shop_name = s["name"]
-    review.branch    = s["branch"]
-    review.city      = s.get("city", "")
+    ctx.user_data["shop"] = s
     await query.edit_message_text(
-        f"✅ Выбрано: <b>{s['name']}</b> — {s['branch']}\n\nОцените ваш визит:",
-        reply_markup=rating_keyboard(), parse_mode=ParseMode.HTML
-    )
-    return ENTERING_RATING
-
-
-async def select_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    rating = int(query.data.split("_")[1])
-    context.user_data["review"].rating = rating
-    await query.edit_message_text(
-        f"✅ Ваша оценка: {'⭐' * rating}\n\n"
-        "Напишите подробный отзыв:\n"
-        "<i>Что понравилось / не понравилось? (10–500 символов)</i>",
+        f"✍️ <b>{s['name']}</b> — {s['branch']}\n\n"
+        f"Напишите — что понравилось, что нет, или любой вопрос.\n"
+        f"Мы ответим здесь.",
         parse_mode=ParseMode.HTML
     )
-    return ENTERING_REVIEW
+    return WRITING_MESSAGE
 
 
-async def enter_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if is_admin(update.effective_user.id) and update.effective_user.id in admin_reply_state:
-        return await handle_admin_reply_text(update, context)
+async def receive_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    uid = update.effective_user.id
+
+    # Администратор в режиме ответа — перехватываем
+    if is_admin(uid) and uid in reply_mode:
+        return await _admin_send_reply(update, ctx)
 
     text = update.message.text.strip()
-    if len(text) < 10:
-        await update.message.reply_text("⚠️ Слишком короткий отзыв! Напишите минимум 10 символов.")
-        return ENTERING_REVIEW
-    if len(text) > 500:
-        await update.message.reply_text("⚠️ Слишком длинный отзыв! Максимум 500 символов.")
-        return ENTERING_REVIEW
-    context.user_data["review"].review_text = text
+    if len(text) < 3:
+        await update.message.reply_text("Напишите чуть подробнее.")
+        return WRITING_MESSAGE
+
+    shop     = ctx.user_data.get("shop", {})
+    tg_id    = ctx.user_data.get("tg_id", uid)
+    username = ctx.user_data.get("username", str(uid))
+
     await update.message.reply_text(
-        "😊 Спасибо! Как вас зовут? (необязательно)",
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton("Пропустить")]], resize_keyboard=True, one_time_keyboard=True
-        )
+        "✅ Сообщение отправлено! Ответим вам здесь в Telegram.",
+        reply_markup=ReplyKeyboardRemove()
     )
-    return ENTERING_NAME
 
-
-async def enter_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    text = update.message.text.strip()
-    context.user_data["review"].user_name = None if text == "Пропустить" else text
-    await update.message.reply_text(
-        "📱 Укажите номер телефона (необязательно):",
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton("Пропустить")]], resize_keyboard=True, one_time_keyboard=True
-        )
-    )
-    return ENTERING_PHONE
-
-
-async def enter_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    text = update.message.text.strip()
-    if text != "Пропустить":
-        context.user_data["review"].user_phone = text
-    review: ReviewData = context.user_data["review"]
-    stars = "⭐" * review.rating
-    preview = (
-        f"🏪 <b>{review.shop_name}</b> — {review.branch}\n"
-        f"⭐ Оценка: {stars}\n"
-        f"👤 Имя: {review.user_name or 'Аноним'}\n"
-        f"📱 Телефон: {review.user_phone or 'не указан'}\n\n"
-        f"📝 <b>Отзыв:</b>\n{review.review_text}"
-    )
-    await update.message.reply_text(
-        "📋 <b>Проверьте ваш отзыв:</b>\n\n" + preview,
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("✅ Отправить", callback_data="confirm_yes"),
-            InlineKeyboardButton("✏️ Изменить",  callback_data="confirm_no")
-        ]]),
-        parse_mode=ParseMode.HTML
-    )
-    return CONFIRM_REVIEW
-
-
-async def confirm_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    if "no" in query.data:
-        context.user_data["review"] = ReviewData()
-        await query.edit_message_text("🔄 Начинаем заново. Выберите магазин:", reply_markup=shop_keyboard())
-        return SELECTING_SHOP
-
-    review: ReviewData = context.user_data["review"]
-    reviews_storage.append(review)
-    await send_admin_notification(context.bot, review)
-
-    # Финальное сообщение — скидка через Instagram-сервис, без лишних кнопок
-    await query.edit_message_text(
-        f"🎉 <b>Спасибо за отзыв! Ваше мнение важно для нас 💙</b>\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🎁 <b>Ваш бонус — скидка {COUPON_DISCOUNT}%</b>\n\n"
-        f"Подпишитесь на наш Instagram <b>@ptbrest</b> — "
-        f"сервис автоматически пришлёт вам слово-пароль в директ.\n"
-        f"Покажите его кассиру и получите скидку {COUPON_DISCOUNT}% "
-        f"на продукты нашего собственного производства 🛒\n\n"
-        f"📸 <a href='{INSTAGRAM_LINK}'>Перейти в Instagram @ptbrest</a>",
-        parse_mode=ParseMode.HTML,
-        disable_web_page_preview=True
-    )
+    await _notify_admins(ctx.bot, shop, text, tg_id, username, source="tg")
+    ctx.user_data.clear()
     return ConversationHandler.END
 
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    if is_admin(update.effective_user.id) and update.effective_user.id in admin_reply_state:
-        del admin_reply_state[update.effective_user.id]
-        await update.message.reply_text("❌ Режим ответа отменён.", reply_markup=ReplyKeyboardRemove())
+async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    uid = update.effective_user.id
+    if uid in reply_mode:
+        del reply_mode[uid]
+        await update.message.reply_text("Режим ответа отменён.")
         return ConversationHandler.END
-    await update.message.reply_text("❌ Отменено. /start — начать заново.", reply_markup=ReplyKeyboardRemove())
+    await update.message.reply_text("Отменено. /start — начать заново.")
     return ConversationHandler.END
 
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
-        "ℹ️ <b>Справка</b>\n\n"
-        "/start — оставить отзыв\n"
-        "/cancel — отменить\n",
-        parse_mode=ParseMode.HTML
-    )
+# ── Уведомление администраторов ─────────────────────────
 
+async def _notify_admins(bot, shop: dict, text: str,
+                         tg_id: int, username: str,
+                         source: str = "tg") -> None:
+    shop_name   = shop.get("name", "—")
+    shop_branch = shop.get("branch", "—")
+    shop_brand  = shop.get("brand", "")
+    ts = datetime.now().strftime("%d.%m %H:%M")
+    icon = "✈️" if source == "tg" else "🌐"
 
-# ══════════════════════════════════════════════════════════
-#  УВЕДОМЛЕНИЕ АДМИНИСТРАТОРАМ
-# ══════════════════════════════════════════════════════════
-
-async def send_admin_notification(bot, review: ReviewData) -> None:
-    stars = "⭐" * (review.rating or 0)
-    source_label = "🌐 Сайт" if review.source == "website" else "✈️ Telegram"
+    user_line = username
+    if source == "tg" and tg_id:
+        user_line += f" · <a href='tg://user?id={tg_id}'>написать напрямую</a>"
 
     msg = (
-        f"📬 <b>НОВЫЙ ОТЗЫВ</b> [{source_label}]\n\n"
-        f"🏪 <b>Магазин:</b> {review.shop_name} — {review.branch}, {review.city or ''}\n"
-        f"⭐ <b>Рейтинг:</b> {stars} ({review.rating}/5)\n"
-        f"👤 <b>Имя:</b> {review.user_name or 'Аноним'}\n"
-        f"📱 <b>Телефон:</b> {review.user_phone or 'не указан'}\n"
-    )
-    if review.user_email:
-        msg += f"📧 <b>Email:</b> {review.user_email}\n"
-    if review.user_tg_id:
-        msg += f"🤖 <b>Telegram ID:</b> {review.user_tg_id}\n"
-    msg += (
-        f"⏰ <b>Время:</b> {review.timestamp.strftime('%d.%m.%Y %H:%M')}\n\n"
-        f"📝 <b>Текст отзыва:</b>\n{review.review_text}"
+        f"📩 <b>Новое сообщение</b> {icon}\n"
+        f"🏪 {shop_name} — {shop_branch}\n"
+        f"👤 {user_line}\n"
+        f"⏱ {ts}\n\n"
+        f"{text}"
     )
 
-    # Кнопка ответа
-    keyboard = None
-    if review.source == "telegram" and review.user_tg_id:
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("💬 Ответить клиенту", callback_data=f"reply_tg_{review.user_tg_id}")
-        ]])
-    elif review.source == "website":
-        contact = review.user_email or review.user_phone or ""
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton(
-                "📋 Показать контакт клиента",
-                callback_data=f"reply_web_0_{contact[:50]}"
-            )
-        ]])
+    buttons = []
+    if source == "tg" and tg_id:
+        buttons.append([InlineKeyboardButton(
+            "💬 Ответить клиенту",
+            callback_data=f"reply_tg_{tg_id}"
+        )])
+
+    staff_id = STORE_STAFF.get(shop_brand)
+    if staff_id:
+        safe_branch = shop_branch.replace("_", "-")
+        buttons.append([InlineKeyboardButton(
+            f"🏪 Передать в {BRAND_NAMES.get(shop_brand, shop_brand)}",
+            callback_data=f"fwd_{staff_id}_{safe_branch[:40]}"
+        )])
+
+    kb = InlineKeyboardMarkup(buttons) if buttons else None
 
     for admin_id in ADMIN_IDS:
         try:
             await bot.send_message(
                 chat_id=admin_id, text=msg,
-                parse_mode=ParseMode.HTML, reply_markup=keyboard
+                parse_mode=ParseMode.HTML,
+                reply_markup=kb,
+                disable_web_page_preview=True
             )
         except Exception as e:
-            logger.error(f"Ошибка отправки уведомления {admin_id}: {e}")
+            logger.error(f"notify admin {admin_id}: {e}")
 
 
-# ══════════════════════════════════════════════════════════
-#  ОТВЕТЫ КЛИЕНТАМ
-# ══════════════════════════════════════════════════════════
+# ── Действия администраторов ────────────────────────────
 
-async def admin_reply_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def cb_admin_action(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
     if not is_admin(query.from_user.id):
@@ -406,145 +267,120 @@ async def admin_reply_button(update: Update, context: ContextTypes.DEFAULT_TYPE)
     data = query.data
 
     if data.startswith("reply_tg_"):
-        user_id = int(data.replace("reply_tg_", ""))
-        admin_reply_state[query.from_user.id] = {"user_id": user_id, "source": "tg"}
-        await context.bot.send_message(
+        client_id = int(data.replace("reply_tg_", ""))
+        reply_mode[query.from_user.id] = {"user_id": client_id, "source": "tg"}
+        await ctx.bot.send_message(
             chat_id=query.from_user.id,
             text=(
-                f"💬 <b>Режим ответа клиенту (Telegram)</b>\n\n"
-                f"Напишите сообщение — оно придёт клиенту прямо в этот бот.\n\n"
-                f"Для отмены: /cancel или нажмите «❌ Отмена»"
+                "✍️ <b>Режим ответа</b>\n\n"
+                "Напишите ответ — он придёт клиенту в бот.\n"
+                "/cancel — отменить"
             ),
-            parse_mode=ParseMode.HTML,
-            reply_markup=ReplyKeyboardMarkup(
-                [[KeyboardButton("❌ Отмена")]], resize_keyboard=True, one_time_keyboard=True
+            parse_mode=ParseMode.HTML
+        )
+
+    elif data.startswith("fwd_"):
+        parts = data.split("_", 2)
+        try:
+            staff_id   = int(parts[1])
+            shop_label = parts[2] if len(parts) > 2 else "магазин"
+        except Exception:
+            return
+        orig = query.message.text or ""
+        try:
+            await ctx.bot.send_message(
+                chat_id=staff_id,
+                text=(
+                    f"📋 <b>Обращение по магазину {shop_label}:</b>\n\n"
+                    f"{orig}"
+                ),
+                parse_mode=ParseMode.HTML
             )
-        )
+            await query.edit_message_reply_markup(
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✅ Передано", callback_data="noop_done")
+                ]])
+            )
+        except Exception as e:
+            await ctx.bot.send_message(
+                chat_id=query.from_user.id,
+                text=f"⚠️ Не удалось переслать сотруднику: {e}"
+            )
 
-    elif data.startswith("reply_web_"):
-        # Показываем контакт клиента с сайта
-        contact = data.replace("reply_web_0_", "")
-        await context.bot.send_message(
-            chat_id=query.from_user.id,
-            text=(
-                f"📋 <b>Контакт клиента с сайта:</b>\n\n"
-                f"<code>{contact or 'не указан'}</code>\n\n"
-                f"Напишите ему на email или позвоните по телефону.\n"
-                f"Автоматический ответ через бота для клиентов без Telegram недоступен."
-            ),
-            parse_mode=ParseMode.HTML
-        )
+    elif data in ("noop", "noop_done"):
+        pass
 
 
-async def handle_admin_reply_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def _admin_send_reply(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     admin_id = update.effective_user.id
-
-    if update.message.text == "❌ Отмена":
-        del admin_reply_state[admin_id]
-        await update.message.reply_text("❌ Режим ответа отменён.", reply_markup=ReplyKeyboardRemove())
-        return ConversationHandler.END
-
-    state = admin_reply_state.get(admin_id)
+    state    = reply_mode.get(admin_id)
     if not state:
-        return
-
-    reply_text = update.message.text.strip()
-
+        return ConversationHandler.END
+    text = update.message.text.strip()
+    if text.lower() in ("/cancel", "отмена"):
+        del reply_mode[admin_id]
+        await update.message.reply_text("Режим ответа отменён.")
+        return ConversationHandler.END
+    client_id = state["user_id"]
     try:
-        await context.bot.send_message(
-            chat_id=state["user_id"],
-            text=(
-                f"📩 <b>Ответ от магазина ПродТовары:</b>\n\n"
-                f"{reply_text}\n\n"
-                f"<i>Если есть вопросы — напишите нам снова через /start</i>"
-            ),
+        await ctx.bot.send_message(
+            chat_id=client_id,
+            text=f"📩 <b>Ответ от ПродТовары:</b>\n\n{text}",
             parse_mode=ParseMode.HTML
         )
-        await update.message.reply_text(
-            "✅ <b>Ответ отправлен клиенту!</b>",
-            parse_mode=ParseMode.HTML, reply_markup=ReplyKeyboardRemove()
-        )
-        for other_id in ADMIN_IDS:
-            if other_id != admin_id:
+        await update.message.reply_text("✅ Ответ отправлен.")
+        for other in ADMIN_IDS:
+            if other != admin_id:
                 try:
-                    await context.bot.send_message(
-                        chat_id=other_id,
-                        text=f"ℹ️ Коллега ответил клиенту:\n\n{reply_text}"
+                    await ctx.bot.send_message(
+                        chat_id=other,
+                        text=f"ℹ️ Коллега ответил клиенту:\n\n{text}"
                     )
                 except Exception:
                     pass
     except Exception as e:
-        await update.message.reply_text(
-            f"❌ Не удалось отправить. Возможно, клиент заблокировал бота.\n{e}",
-            reply_markup=ReplyKeyboardRemove()
-        )
-
-    del admin_reply_state[admin_id]
+        await update.message.reply_text(f"⚠️ Не удалось отправить: {e}")
+    del reply_mode[admin_id]
     return ConversationHandler.END
 
 
-async def admin_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def admin_message_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    uid = update.effective_user.id
+    if is_admin(uid) and uid in reply_mode:
+        await _admin_send_reply(update, ctx)
+
+
+# ── Команды администратора ──────────────────────────────
+
+async def cmd_staff(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_admin(update.effective_user.id):
         return
-    if update.effective_user.id in admin_reply_state:
-        await handle_admin_reply_text(update, context)
-
-
-# ══════════════════════════════════════════════════════════
-#  ADMIN-КОМАНДЫ
-# ══════════════════════════════════════════════════════════
-
-async def check_coupon_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_admin(update.effective_user.id):
-        return
-    if not context.args:
-        await update.message.reply_text("Использование: /check <код_купона>"); return
-    result = {"valid": False, "message": "❌ Купон не найден"}
-    code = context.args[0].upper()
-    for c in coupons_storage:
-        if c.code == code:
-            result = {"message": f"✅ Купон действителен! Скидка {c.discount}%"} if not c.used else {"message": "❌ Уже использован"}
-            break
-    await update.message.reply_text(result["message"])
-
-
-async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_admin(update.effective_user.id):
-        return
-    total     = len(reviews_storage)
-    avg       = (sum(r.rating for r in reviews_storage if r.rating) / total) if total else 0
-    tg_count  = sum(1 for r in reviews_storage if r.source == "telegram")
-    web_count = sum(1 for r in reviews_storage if r.source == "website")
-    shops = {}
-    for r in reviews_storage:
-        shops[r.shop_name] = shops.get(r.shop_name, 0) + 1
-    top = "\n".join(f"  • {k}: {v}" for k, v in sorted(shops.items(), key=lambda x: -x[1])[:5]) or "  нет данных"
+    lines = [
+        f"• {BRAND_NAMES.get(b, b)}: ID {sid}"
+        for b, sid in STORE_STAFF.items()
+    ]
+    text = "\n".join(lines) if lines else (
+        "Маршрутизация не настроена.\n"
+        "Добавьте ID сотрудников в STORE_STAFF в коде бота.\n"
+        "Узнать свой ID: @userinfobot"
+    )
     await update.message.reply_text(
-        f"📊 <b>Статистика отзывов</b>\n\n"
-        f"Всего: <b>{total}</b>\n"
-        f"  — Telegram: <b>{tg_count}</b>\n"
-        f"  — Сайт: <b>{web_count}</b>\n"
-        f"Средняя оценка: <b>{avg:.1f} ⭐</b>\n\n"
-        f"<b>Топ магазины:</b>\n{top}",
+        f"🏪 <b>Ответственные по магазинам:</b>\n\n{text}",
         parse_mode=ParseMode.HTML
     )
 
 
-# ══════════════════════════════════════════════════════════
-#  HTTP-СЕРВЕР ДЛЯ ПРИЁМА ОТЗЫВОВ С САЙТА
-# ══════════════════════════════════════════════════════════
+# ── HTTP-сервер для web-отзывов ─────────────────────────
 
 class WebhookHandler(BaseHTTPRequestHandler):
-    """Принимает POST /webhook/web-review от сайта Битрикс."""
-
-    def log_message(self, format, *args):
-        logger.info(f"HTTP {self.command} {self.path}: {format % args}")
+    def log_message(self, fmt, *args):
+        logger.info("HTTP: " + fmt % args)
 
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(b'{"status":"ok","service":"ProdTovary Review Bot"}')
+        self.wfile.write(b'{"status":"ok"}')
 
     def do_OPTIONS(self):
         self.send_response(200)
@@ -558,37 +394,32 @@ class WebhookHandler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
             return
-
         try:
-            content_len = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(content_len)
-            data = json.loads(body.decode("utf-8"))
+            length = int(self.headers.get("Content-Length", 0))
+            data   = json.loads(self.rfile.read(length).decode("utf-8"))
         except Exception as e:
-            logger.error(f"Ошибка разбора JSON: {e}")
+            logger.error(f"JSON: {e}")
             self.send_response(400)
             self.end_headers()
-            self.wfile.write(b'{"error":"invalid json"}')
             return
 
-        review = ReviewData()
-        review.source     = "website"
-        review.shop_id    = data.get("shop_id", "")
-        review.shop_name  = data.get("shop_name", "Магазин")
-        review.branch     = data.get("branch", "")
-        review.city       = data.get("city", "")
-        review.rating     = int(data.get("rating", 0))
-        review.review_text= str(data.get("review", ""))
-        review.user_name  = data.get("name") or None
-        review.user_phone = data.get("phone") or None
-        review.user_email = data.get("email") or None
-        review.user_tg_id = None
-        review.timestamp  = datetime.now()
-        reviews_storage.append(review)
+        shop = {
+            "id":     data.get("shop_id", ""),
+            "name":   data.get("shop_name", "Магазин"),
+            "branch": data.get("branch", ""),
+            "brand":  data.get("brand", ""),
+        }
+        text     = str(data.get("message", data.get("review", "")))
+        name     = data.get("name", "")
+        email    = data.get("email", "")
+        phone    = data.get("phone", "")
+        username = name or email or "Посетитель сайта"
+        if phone:
+            username += f" · {phone}"
 
-        # Отправляем уведомление через event loop бота
         if _bot_loop and _app:
             asyncio.run_coroutine_threadsafe(
-                send_admin_notification(_app.bot, review),
+                _notify_admins(_app.bot, shop, text, 0, username, source="web"),
                 _bot_loop
             )
 
@@ -596,62 +427,49 @@ class WebhookHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
-        self.wfile.write(b'{"status":"ok","message":"review received"}')
+        self.wfile.write(b'{"status":"ok"}')
 
 
-def run_http_server():
-    server = HTTPServer(("0.0.0.0", PORT), WebhookHandler)
-    logger.info(f"HTTP-сервер для приёма отзывов с сайта запущен на порту {PORT}")
-    server.serve_forever()
+def _run_http():
+    srv = HTTPServer(("0.0.0.0", PORT), WebhookHandler)
+    logger.info(f"HTTP на порту {PORT}")
+    srv.serve_forever()
 
 
-# ══════════════════════════════════════════════════════════
-#  MAIN
-# ══════════════════════════════════════════════════════════
+# ── Main ────────────────────────────────────────────────
 
-def main():
-    import asyncio
-    asyncio.set_event_loop(asyncio.new_event_loop())  # ← добавьте эту строку
 def main() -> None:
     global _app, _bot_loop
 
-    application = Application.builder().token(BOT_TOKEN).build()
-    _app = application
+    app = Application.builder().token(BOT_TOKEN).build()
+    _app = app
 
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
+    conv = ConversationHandler(
+        entry_points=[CommandHandler("start", cmd_start)],
         states={
-            SELECTING_SHOP:  [CallbackQueryHandler(select_shop,   pattern=r"^(shop_|noop)")],
-            ENTERING_RATING: [CallbackQueryHandler(select_rating, pattern=r"^rating_")],
-            ENTERING_REVIEW: [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_review)],
-            ENTERING_NAME:   [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_name)],
-            ENTERING_PHONE:  [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_phone)],
-            CONFIRM_REVIEW:  [CallbackQueryHandler(confirm_review, pattern=r"^confirm_")],
+            SELECTING_SHOP:  [CallbackQueryHandler(cb_select_shop, pattern=r"^(shop_|noop)")],
+            WRITING_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_message)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[CommandHandler("cancel", cmd_cancel)],
         allow_reentry=True,
     )
 
-    application.add_handler(conv_handler)
-    application.add_handler(CommandHandler("help",  help_command))
-    application.add_handler(CommandHandler("check", check_coupon_cmd))
-    application.add_handler(CommandHandler("stats", stats_cmd))
-    application.add_handler(CallbackQueryHandler(admin_reply_button, pattern=r"^reply_(tg|web)_"))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_message_handler))
+    app.add_handler(conv)
+    app.add_handler(CallbackQueryHandler(cb_admin_action, pattern=r"^(reply_|fwd_|noop)"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_message_handler))
+    app.add_handler(CommandHandler("cancel", cmd_cancel))
+    app.add_handler(CommandHandler("staff",  cmd_staff))
 
-    # Запускаем HTTP-сервер в фоне
-    http_thread = threading.Thread(target=run_http_server, daemon=True)
-    http_thread.start()
+    threading.Thread(target=_run_http, daemon=True).start()
 
-    # Сохраняем loop после старта
-    async def _save_loop(app):
+    async def _save_loop(a):
         global _bot_loop
         _bot_loop = asyncio.get_event_loop()
 
-    application.post_init = _save_loop
+    app.post_init = _save_loop
 
-    logger.info("Бот запущен. Администраторы: %s", ADMIN_IDS)
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    logger.info(f"Бот запущен. Администраторы: {ADMIN_IDS}")
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
